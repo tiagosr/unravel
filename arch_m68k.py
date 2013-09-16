@@ -109,31 +109,6 @@ def M68K_decode_addr_mode_A_other(op):
 	]
 	return modes[mode_field]
 
-def M68K_ORI(op, at, image):
-	size = M68K_decode_size_A(op)
-	if size:
-		op_size = 2
-		return Insn('ori.'+size['id'], ['logic', 'or'], at, op_size, {})
-	else:
-		return M68K_Invalid_Insn(op, at, image)
-
-m68k_0xxx_even_tbl = [
-        M68K_ORI,
-        M68K_ANDI,
-        M68K_SUBI,
-        M68K_ADDI,
-        M68K_BIT_Imm_Insn,
-        M68K_EORI,
-        M68K_CMPI,
-        M68K_Invalid_Insn,
-    ]
-def M68K_0xxx_Insn(op, at, image):
-    index = (op / 65536) & 255
-    if index & 1 is 1:
-        pass
-    else:
-        return m68k_0xxx_even_tbl(op, at, image)
-
 m68k_addr_mode = [
     'data_reg',
     'addr_reg',
@@ -389,4 +364,4 @@ m68k_insn_patterns = [
 
 class ArchM68K(ArchBigEndian):
     def decode(self, image, at):
-        return TableMatch(self.read16(image, at), at, image)
+        return TableMatch(self.read16(image, at), at, image, m68k_insn_patterns)

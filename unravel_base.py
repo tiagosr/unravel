@@ -39,7 +39,7 @@ class Insn:
         self.mnemonic = mnemo
         self.tags = tags
         self.info = info
-        if self.arrows:
+        if arrows:
             self.arrows = arrows
         else:
             self.arrows = [Arrow('goto', at+size)]
@@ -57,7 +57,7 @@ class InsnDecoder:
             self.entry_nodes[point] = node
             node.trace(self, True)
     def decode(self, at):
-        return self.arch.decode(image, at)
+        return self.arch.decode(self.image, at)
     def node_at(self, at, follow = False):
         if at in self.traced_nodes:
             return self.traced_nodes[at]
@@ -72,9 +72,9 @@ class ArchBigEndian:
     def read8(self, image, at):
         return image.read_byte(at)
     def read16(self, image, at):
-        return self.read8(at)*256 + self.read8(at+1)
+        return self.read8(image, at)*256 + self.read8(image, at+1)
     def read32(self, image, at):
-        return self.read16(at)*65536 + self.read16(at+2)
+        return self.read16(image, at)*65536 + self.read16(image, at+2)
     def decode(self, image, at):
         return Insn('halt', None, [])
 
@@ -82,9 +82,9 @@ class ArchLittleEndian:
     def read8(self, image, at):
         return image.read_byte(at)
     def read16(self, image, at):
-        return self.read8(at) + self.read8(at+1)*256
+        return self.read8(image, at) + self.read8(image, at+1)*256
     def read32(self, image, at):
-        return self.read16(at) + self.read16(at+2)*65536
+        return self.read16(image, at) + self.read16(image, at+2)*65536
     def decode(self, image, at):
         return Insn('halt', None, [])
 
