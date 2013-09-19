@@ -19,6 +19,9 @@ var addr_regs = [
 	{name: 'A7', index:7, type:'address', alt:'SP'}
 ]
 
+var size_table_0 = ['byte', 'word', 'long', 'invalid'];
+var size_table_1 = ['invalid', 'byte', 'long', 'word'];
+
 var effective_address = function(decoder, op, at, image, op_mode) {
 	var mode = (op & 0x38) >> 3;
 	var reg = (op & 0x07);
@@ -180,7 +183,7 @@ var LEA = function(decoder, op, at, image, match) {
 
 var Type3 = function(decoder, op, at, image, match) {
 	var reg = data_regs[(op & 0xe00) >> 9];
-	var op_mode = ['byte', 'word', 'long', 'invalid'][(op & 0x00c0) >> 6];
+	var op_mode = size_table_0[(op & 0x00c0) >> 6];
 	var ea = effective_address(decoder, op, at, image, op_mode);
 	var dir = (op & 0x100)>>8;
 	var source = ea, dest = reg;
@@ -206,6 +209,54 @@ var Type3A = function(decoder, op, at, image, match) {
 }
 
 
+var Move = function(decoder, op, at, image, match) {
+	var op_mode = size_table_1[(op & 0x3000) >> 12];
+	var source = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	var dest = effective_address(decoder, (op & 0x0fc0) >> 6, at+source.size, image, op_mode); 
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['move']),
+		at, 2+source.size+dest.size,
+		{source:source, dest:dest}
+	)
+}
+
+var Scc = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['store', 'conditional']),
+		at, 2+dest.size,
+		{dest:dest}
+	)
+}
+
+var PEA = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['push', 'stack', 'effective address']),
+		at, 2+dest.size,
+		{dest:dest}
+	)
+}
+
+var JMP = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	var arrows = [];
+	switch(dest.type) {
+	case "imm":
+	case "abs_short":
+	case "abs_long":
+		arrows.push(new Arrow('jump', dest.data, 'code'));
+		break;
+	case "pc_relative":
+		arrows.push(new Arrow('jump', dest.data+at, 'code'))
+		break;
+	}
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['jump']),
+		at, 2+dest.size,
+		{dest:dest}, arrows
+	)
+}
 
 
 
@@ -227,14 +278,14 @@ var insn_table = [
 	{mnemonic: 'trapv',   match: 0x4e76, mask: 0xffff, fn: Type10},
 	{mnemonic: 'illegal', match: 0x4afc, mask: 0xffff, fn: Type10},
 	
-	{mnemonic: 'swap', match: 0x4840, mask: 0xfff8, fn: Type5},
+	{mnemonic: 'swap', match: 0x4840, mask: 0xfff8, fn: SWAP},
 	{mnemonic: 'unlk', match: 0x4e58, mask: 0xfff8, fn: Type9},
 	{mnemonic: 'link', match: 0x4e50, mask: 0xfff8, fn: LINK},
 
 	{mnemonic: 'trap', match: 0x4e40, mask: 0xfff0, fn: Type24},
-	{mnemonic: 'tas',  match: 0x4ac0, mask: 0xffc0, fn: Type5},
-	{mnemonic: 'jmp',  match: 0x4ec0, mask: 0xffc0, fn: Type5},
-	{mnemonic: 'jsr',  match: 0x4e80, mask: 0xffc0, fn: Type5},
+	{mnemonic: 'tas',  match: 0x4ac0, mask: 0xffc0, fn: TAS},
+	{mnemonic: 'jmp',  match: 0x4ec0, mask: 0xffc0, fn: JMP},
+	{mnemonic: 'jsr',  match: 0x4e80, mask: 0xffc0, fn: JSR},
 
 	{mnemonic: 'move {ea}, usp', match: 0x4e60, mask: 0xfff8, fn: Type28, direction:'reg'},
 	{mnemonic: 'move usp, {ea}', match: 0x4e68, mask: 0xfff8, fn: Type28, direction:'mem'},
@@ -245,7 +296,7 @@ var insn_table = [
 	{mnemonic: 'move {ea}, sr',  match: 0x46c0, mask: 0xffc0, fn: Type26, direction:'reg'},
 	
 	{mnemonic: 'nbcd', match: 0x4800, mask: 0xffc0, fn: Type15},
-	{mnemonic: 'pea',  match: 0x4840, mask: 0xffc0, fn: Type5},
+	{mnemonic: 'pea',  match: 0x4840, mask: 0xffc0, fn: PEA},
 
 	{mnemonic: 'ext',  match: 0x4800, mask: 0xfe30, fn: Type12},
 
@@ -277,22 +328,22 @@ var insn_table = [
 	{mnemonic: 'dbgt', match: 0x5ec8, mask: 0xfff8, fn: Type17},
 	{mnemonic: 'dble', match: 0x5fc8, mask: 0xfff8, fn: Type17},
 	
-	{mnemonic: 'st',   match: 0x50c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sf',   match: 0x51c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'shi',  match: 0x52c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sls',  match: 0x53c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'scc',  match: 0x54c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'scs',  match: 0x55c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sne',  match: 0x56c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'seq',  match: 0x57c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'svc',  match: 0x58c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'svs',  match: 0x59c0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'spl',  match: 0x5ac0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'smi',  match: 0x5bc0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sge',  match: 0x5cc0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'slt',  match: 0x5dc0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sgt',  match: 0x5ec0, mask: 0xfff8, fn: Type5},
-	{mnemonic: 'sle',  match: 0x5fc0, mask: 0xfff8, fn: Type5},
+	{mnemonic: 'st',   match: 0x50c0, mask: 0xfff8, fn: Scc, tags:['true']},
+	{mnemonic: 'sf',   match: 0x51c0, mask: 0xfff8, fn: Scc, tags:['false']},
+	{mnemonic: 'shi',  match: 0x52c0, mask: 0xfff8, fn: Scc, tags:['higher']},
+	{mnemonic: 'sls',  match: 0x53c0, mask: 0xfff8, fn: Scc, tags:['lower-same']},
+	{mnemonic: 'scc',  match: 0x54c0, mask: 0xfff8, fn: Scc, tags:['carry-clear']},
+	{mnemonic: 'scs',  match: 0x55c0, mask: 0xfff8, fn: Scc, tags:['carry-set']},
+	{mnemonic: 'sne',  match: 0x56c0, mask: 0xfff8, fn: Scc, tags:['not-equal']},
+	{mnemonic: 'seq',  match: 0x57c0, mask: 0xfff8, fn: Scc, tags:['equal']},
+	{mnemonic: 'svc',  match: 0x58c0, mask: 0xfff8, fn: Scc, tags:['overflow-clear']},
+	{mnemonic: 'svs',  match: 0x59c0, mask: 0xfff8, fn: Scc, tags:['overflow-set']},
+	{mnemonic: 'spl',  match: 0x5ac0, mask: 0xfff8, fn: Scc, tags:['plus']},
+	{mnemonic: 'smi',  match: 0x5bc0, mask: 0xfff8, fn: Scc, tags:['minus']},
+	{mnemonic: 'sge',  match: 0x5cc0, mask: 0xfff8, fn: Scc, tags:['greater-equal']},
+	{mnemonic: 'slt',  match: 0x5dc0, mask: 0xfff8, fn: Scc, tags:['less-than']},
+	{mnemonic: 'sgt',  match: 0x5ec0, mask: 0xfff8, fn: Scc, tags:['greater']},
+	{mnemonic: 'sle',  match: 0x5fc0, mask: 0xfff8, fn: Scc, tags:['less']},
 
 	{mnemonic: 'bt',   match: 0x6000, mask: 0xff00, fn: Type8},
 	{mnemonic: 'bf',   match: 0x6100, mask: 0xff00, fn: Type8},
@@ -334,9 +385,9 @@ var insn_table = [
 	{mnemonic: 'roxl', match: 0xe110, mask: 0xf118, fn: Type11},
 	{mnemonic: 'roxr', match: 0xe010, mask: 0xf118, fn: Type11},
 
-	{mnemonic: 'move.b', match: 0x1000, mask: 0xf000, fn: Type4},
-	{mnemonic: 'move.l', match: 0x2000, mask: 0xf000, fn: Type4},
-	{mnemonic: 'move.w', match: 0x3000, mask: 0xf000, fn: Type4},
+	{mnemonic: 'move.b', match: 0x1000, mask: 0xf000, fn: Move, tags: ['byte']},
+	{mnemonic: 'move.l', match: 0x2000, mask: 0xf000, fn: Move, tags: ['long']},
+	{mnemonic: 'move.w', match: 0x3000, mask: 0xf000, fn: Move, tags: ['word']},
 
 	{mnemonic: 'moveq', match: 0x7000, mask: 0xf100, fn: Type22},
 

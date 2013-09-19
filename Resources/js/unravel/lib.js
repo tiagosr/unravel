@@ -5,15 +5,15 @@ CodeGraphNode = function(at, read_as) {
 CodeGraphNode.prototype.trace = function(code, deep) {
 	this.op = code.decode(at);
 	this.flow = {
-		go_to: [],
+		jump: [],
 		call: [],
 		data: []
 	}
 	var self = this;
 	_.each(this.op.arrows, function(arrow) {
 		switch(arrow.type){
-			case "go_to":
-				self.flow.go_to.push(code.node_at(arrow.dest, deep));
+			case "jump":
+				self.flow.jump.push(code.node_at(arrow.dest, deep));
 				break;
 			case "call":
 				self.flow.call.push(code.node_at(arrow.dest, deep));
@@ -38,7 +38,7 @@ Insn = function(mnemo, tags, at, size, info, arrows) {
 	this.at = at;
 	this.size = size;
 	this.info = info;
-	this.arrows = arrows || [new Arrow('go_to', at + size)];
+	this.arrows = arrows || [new Arrow('jump', at + size)];
 }
 InvalidInsn = function(at, size) {
 	return new Insn("(invalid instruction)", [], at, size || 1, {}, []);
