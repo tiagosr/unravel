@@ -221,7 +221,7 @@ var Move = function(decoder, op, at, image, match) {
 }
 
 var Scc = function(decoder, op, at, image, match) {
-	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	var dest = effective_address(decoder, op & 0x3f, at, image, 0);
 	return new Insn(
 		match.mnemonic, _.extend(match.tags, ['store', 'conditional']),
 		at, 2+dest.size,
@@ -230,7 +230,7 @@ var Scc = function(decoder, op, at, image, match) {
 }
 
 var PEA = function(decoder, op, at, image, match) {
-	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	var dest = effective_address(decoder, op & 0x3f, at, image, 0);
 	return new Insn(
 		match.mnemonic, _.extend(match.tags, ['push', 'stack', 'effective address']),
 		at, 2+dest.size,
@@ -238,8 +238,26 @@ var PEA = function(decoder, op, at, image, match) {
 	)
 }
 
+var TAS = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, 0);
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['test-and-set']),
+		at, 2+dest.size,
+		{dest:dest}
+	)
+}
+
+var SWAP = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, 0);
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['swap']),
+		at, 2+dest.size,
+		{dest:dest}
+	)
+}
+
 var JMP = function(decoder, op, at, image, match) {
-	var dest = effective_address(decoder, op & 0x3f, at, image, op_mode);
+	var dest = effective_address(decoder, op & 0x3f, at, image, 0);
 	var arrows = [];
 	switch(dest.type) {
 	case "imm":
@@ -255,6 +273,59 @@ var JMP = function(decoder, op, at, image, match) {
 		match.mnemonic, _.extend(match.tags, ['jump']),
 		at, 2+dest.size,
 		{dest:dest}, arrows
+	)
+}
+
+var Type6 = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, size_table_0[(op & 0xc0)>>6]);
+	var data = op & 0xe0 >> 9;
+	if (data == 0) data = 8;
+	return new Insn(
+		match.mnemonic, _.extend(match.tags, ['quick', 'immediate']),
+		at, 2+dest.size,
+		{dest:dest, data:data}
+	)
+}
+
+var TST = function(decoder, op, at, image, match) {
+	var dest = effective_address(decoder, op & 0x3f, at, image, size_table_0[(op & 0xc0)>>6]);
+	return new Insn(
+		match.mnemonic, ['test', 'flags'],
+		at, 2+dest.size,
+		{dest:dest}
+	)
+}
+
+var Bcc = function(decoder, op, at, image, match) {
+	var disp = op & 0xff;
+	var size = "";
+	var opsize = 2;
+	var tags = ['branch', 'displacement'];
+	if (disp == 0) {
+		disp = decoder.readS16(image, at+2);
+		dest += 2;
+		opsize += 2;
+		tags.push('word')
+	} else {
+		size = ".s"
+		if (displacement >= 0x80) {
+			displacement -= 0x100;
+		}
+		tags.push('short')
+	}
+	var dest += at + opsize
+	var arrows = []
+	if (match.subroutine) {
+		arrows.push(new Arrow('call', dest, 'code'))
+	}
+	else {
+		arrows.push(new Arrow('call', dest, 'code'));	
+	}
+	if (!match.alwaystrue) arrows.push(new Arrow('jump', at+opsize, 'code'));
+	return new Insn(
+		match.mnemonic + size, _.extend(match.tags, tags),
+		at, opsize,
+		{dest: dest}, arrows
 	)
 }
 
@@ -305,7 +376,7 @@ var insn_table = [
 	{mnemonic: 'chk',  match: 0x4180, mask: 0xf1c0, fn: Type16},
 	{mnemonic: 'lea',  match: 0x41c0, mask: 0xf1c0, fn: LEA},
 
-	{mnemonic: 'tst',  match: 0x4a00, mask: 0xff00, fn: Type7},
+	{mnemonic: 'tst',  match: 0x4a00, mask: 0xff00, fn: TST},
 	{mnemonic: 'clr',  match: 0x4200, mask: 0xff00, fn: Type15},
 	{mnemonic: 'neg',  match: 0x4400, mask: 0xff00, fn: Type15},
 	{mnemonic: 'negx', match: 0x4000, mask: 0xff00, fn: Type15},
@@ -345,27 +416,32 @@ var insn_table = [
 	{mnemonic: 'sgt',  match: 0x5ec0, mask: 0xfff8, fn: Scc, tags:['greater']},
 	{mnemonic: 'sle',  match: 0x5fc0, mask: 0xfff8, fn: Scc, tags:['less']},
 
-	{mnemonic: 'bt',   match: 0x6000, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bf',   match: 0x6100, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bhi',  match: 0x6200, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bls',  match: 0x6300, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bcc',  match: 0x6400, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bcs',  match: 0x6500, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bne',  match: 0x6600, mask: 0xff00, fn: Type8},
-	{mnemonic: 'beq',  match: 0x6700, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bvc',  match: 0x6800, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bvs',  match: 0x6900, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bpl',  match: 0x6a00, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bmi',  match: 0x6b00, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bge',  match: 0x6c00, mask: 0xff00, fn: Type8},
-	{mnemonic: 'blt',  match: 0x6d00, mask: 0xff00, fn: Type8},
-	{mnemonic: 'bgt',  match: 0x6e00, mask: 0xff00, fn: Type8},
-	{mnemonic: 'ble',  match: 0x6f00, mask: 0xff00, fn: Type8},
+	{mnemonic: 'bra',   match: 0x6000, mask: 0xff00, fn: Bcc, alwaystrue:true},
+	{mnemonic: 'bsr',   match: 0x6100, mask: 0xff00, fn: Bcc, subroutine:true},
+	{mnemonic: 'bhi',  match: 0x6200, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bls',  match: 0x6300, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bcc',  match: 0x6400, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bcs',  match: 0x6500, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bne',  match: 0x6600, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'beq',  match: 0x6700, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bvc',  match: 0x6800, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bvs',  match: 0x6900, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bpl',  match: 0x6a00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bmi',  match: 0x6b00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bge',  match: 0x6c00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'blt',  match: 0x6d00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bgt',  match: 0x6e00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'ble',  match: 0x6f00, mask: 0xff00, fn: Bcc},
 	
 
-	{mnemonic: 'addq', match: 0x5000, mask: 0xf100, fn: Type6},
+	{mnemonic: 'addq', match: 0x5000, mask: 0xf100, fn: Type6, tags:['add', '+']},
 	{mnemonic: 'muls', match: 0xc1c0, mask: 0xf1c0, fn: Type16},
 	{mnemonic: 'mulu', match: 0xc0c0, mask: 0xf1c0, fn: Type16},
+	{mnemonic: 'divs', match: 0x81c0, mask: 0xf1c0, fn: Type16},
+	{mnemonic: 'divu', match: 0x80c0, mask: 0xf1c0, fn: Type16},
+
+
+	{mnemonic: 'exg',  match: 0xc100, mask: 0xf130, fn: Type18},
 	
 
 	{mnemonic: 'rol',  match: 0xe7c0, mask: 0xffc0, fn: Type11},
@@ -424,7 +500,7 @@ var insn_table = [
 	{mnemonic: 'bclr', match: 0x0180, mask: 0xf1c0, fn: Type21},
 	{mnemonic: 'bset', match: 0x01c0, mask: 0xf1c0, fn: Type21},
 	
-	{mnemonic: 'subq', match: 0x5100, mask: 0xf100, fn: Type6},
+	{mnemonic: 'subq', match: 0x5100, mask: 0xf100, fn: Type6, tags: ['subtract', '-']},
 	{mnemonic: 'suba', match: 0x9000, mask: 0xf0c0, fn: Type3A, tags:['subtract', '-']},
 	{mnemonic: 'subx', match: 0x9100, mask: 0xf130, fn: Type14},
 	{mnemonic: 'sub',  match: 0x9000, mask: 0xf000, fn: Type3, tags:['subtract', '-']},
