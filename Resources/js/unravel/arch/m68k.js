@@ -329,6 +329,77 @@ var Bcc = function(decoder, op, at, image, match) {
 	)
 }
 
+var UNLK = function(decoder, op, at, image, match) {
+	var addr_reg = addr_regs[op & 7];
+	return new Insn(
+		match.mnemonic, ['unlink'],
+		at, 2,
+		{dest: addr_reg}
+	)
+}
+
+var Type10 = function(decoder, op, at, image, match) {
+	return new Insn(
+		match.mnemonic, match.tags,
+		at, 2,
+		{}, [] // no arrows - stop current flow
+	)
+}
+
+var NOP = function(decoder, op, at, image, match) {
+	return new Insn(
+		match.mnemonic, ['no-op'],
+		at, 2, {}
+	)
+}
+
+var TRAPV = function(decoder, op, at, image, match) {
+	return new Insn(
+		match.mnemonic, ['trap', 'conditional', 'overflow'],
+		at, 2, {vector: 7},
+		[
+			new Arrow('jump', at+2, 'code'),
+			new Arrow('call', image.read32(28), 'code') // interrupt vector 7, at 7 * 4
+		]
+	)
+}
+
+var TRAP = function(decoder, op, at, image, match) {
+	var vector = op & 0xf;
+	return new Insn(
+		match.mnemonic, ['trap'],
+		at, 2, {vector: vector},
+		[
+			new Arrow('jump', at+2, 'code'),
+			new Arrow('call', image.read32(vector*4), 'code')
+		]
+	)
+}
+
+var Type11 = function(decoder, op, at, image, match) {
+	// rotates, shifts
+	var sz = (op & 0xc0) >> 6;
+	if (sz < 3) { // register ops
+		var tp = op & 0x20;
+		var dest_data_reg = data_regs[op & 0x07];
+		var count = op & 0xe00 >> 9
+		if (tp) {
+			count = data_regs[count];
+		}
+		return new Insn(
+			match.mnemonic+['.b','.w','.l'][sz], _.extend(match.tags, tp?['register', 'register-source']:['register'], [['byte', 'word', 'long'][sz]]),
+			at, 2, {dest: dest_data_reg, count:count}
+		)
+	} else { // memory ops
+		var ea = effective_address(decoder, op & 0x3f, at, image, size_table_0[(op & 0xc0)>>6]);
+		return new Insn(
+			match.mnemonic, _.extend(match.tags, ['memory']),
+			at, 2+ea.size, {dest: ea, count: 1}
+		)
+	}
+}
+
+
 
 
 var insn_table = [
@@ -340,20 +411,20 @@ var insn_table = [
 	{mnemonic: 'eor',  match: 0xb100, mask: 0xf100, fn: Type3, tags:['xor', '^']},
 	{mnemonic: 'cmp',  match: 0xb000, mask: 0xf100, fn: Type3, tags:['compare']},
 
-	{mnemonic: 'reset',   match: 0x4e70, mask: 0xffff, fn: Type10},
-	{mnemonic: 'nop',     match: 0x4e71, mask: 0xffff, fn: Type10},
-	{mnemonic: 'stop',    match: 0x4e72, mask: 0xffff, fn: Type10},
-	{mnemonic: 'rte',     match: 0x4e73, mask: 0xffff, fn: Type10},
-	{mnemonic: 'rts',     match: 0x4e75, mask: 0xffff, fn: Type10},
-	{mnemonic: 'rtr',     match: 0x4e77, mask: 0xffff, fn: Type10},
-	{mnemonic: 'trapv',   match: 0x4e76, mask: 0xffff, fn: Type10},
-	{mnemonic: 'illegal', match: 0x4afc, mask: 0xffff, fn: Type10},
+	{mnemonic: 'reset',   match: 0x4e70, mask: 0xffff, fn: Type10, tags:['reset']},
+	{mnemonic: 'nop',     match: 0x4e71, mask: 0xffff, fn: NOP},
+	{mnemonic: 'stop',    match: 0x4e72, mask: 0xffff, fn: Type10, tags:['halt', 'processor-stop']},
+	{mnemonic: 'rtd',     match: 0x4e73, mask: 0xffff, fn: Type10, tags:['return', 'subroutine', 'displacement']},
+	{mnemonic: 'rts',     match: 0x4e75, mask: 0xffff, fn: Type10, tags:['return', 'subroutine']},
+	{mnemonic: 'rtr',     match: 0x4e77, mask: 0xffff, fn: Type10, tags:['return', 'supervisor']},
+	{mnemonic: 'trapv',   match: 0x4e76, mask: 0xffff, fn: TRAPV},
+	{mnemonic: 'illegal', match: 0x4afc, mask: 0xffff, fn: Type10, tags:['illegal']},
 	
 	{mnemonic: 'swap', match: 0x4840, mask: 0xfff8, fn: SWAP},
-	{mnemonic: 'unlk', match: 0x4e58, mask: 0xfff8, fn: Type9},
+	{mnemonic: 'unlk', match: 0x4e58, mask: 0xfff8, fn: UNLK},
 	{mnemonic: 'link', match: 0x4e50, mask: 0xfff8, fn: LINK},
 
-	{mnemonic: 'trap', match: 0x4e40, mask: 0xfff0, fn: Type24},
+	{mnemonic: 'trap', match: 0x4e40, mask: 0xfff0, fn: TRAP},
 	{mnemonic: 'tas',  match: 0x4ac0, mask: 0xffc0, fn: TAS},
 	{mnemonic: 'jmp',  match: 0x4ec0, mask: 0xffc0, fn: JMP},
 	{mnemonic: 'jsr',  match: 0x4e80, mask: 0xffc0, fn: JSR},
@@ -444,22 +515,22 @@ var insn_table = [
 	{mnemonic: 'exg',  match: 0xc100, mask: 0xf130, fn: Type18},
 	
 
-	{mnemonic: 'rol',  match: 0xe7c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'roxl', match: 0xe5c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'lsl',  match: 0xe3c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'asl',  match: 0xe100, mask: 0xf118, fn: Type11},
-	{mnemonic: 'asl',  match: 0xe1c0, mask: 0xf1c0, fn: Type11},
+	{mnemonic: 'rol',  match: 0xe7c0, mask: 0xffc0, fn: Type11, tags:['rotate', 'left']},
+	{mnemonic: 'roxl', match: 0xe5c0, mask: 0xffc0, fn: Type11, tags:['rotate', 'left', 'x']},
+	{mnemonic: 'lsl',  match: 0xe3c0, mask: 0xffc0, fn: Type11, tags:['shift', 'logic', 'left']},
+	{mnemonic: 'asl',  match: 0xe100, mask: 0xf118, fn: Type11, tags:['shift', 'arithmetic', 'left']},
+	{mnemonic: 'asl',  match: 0xe1c0, mask: 0xf1c0, fn: Type11, tags:['shift', 'arithmetic', 'left']},
 
-	{mnemonic: 'ror',  match: 0xe6c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'roxr', match: 0xe4c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'lsr',  match: 0xe2c0, mask: 0xffc0, fn: Type11},
-	{mnemonic: 'asr',  match: 0xe000, mask: 0xf118, fn: Type11},
-	{mnemonic: 'asr',  match: 0xe0c0, mask: 0xf1c0, fn: Type11},
+	{mnemonic: 'ror',  match: 0xe6c0, mask: 0xffc0, fn: Type11, tags:['rotate', 'right']},
+	{mnemonic: 'roxr', match: 0xe4c0, mask: 0xffc0, fn: Type11, tags:['rotate', 'right', 'x']},
+	{mnemonic: 'lsr',  match: 0xe2c0, mask: 0xffc0, fn: Type11, tags:['shift', 'logic', 'right']},
+	{mnemonic: 'asr',  match: 0xe000, mask: 0xf118, fn: Type11, tags:['shift', 'arithmetic', 'right']},
+	{mnemonic: 'asr',  match: 0xe0c0, mask: 0xf1c0, fn: Type11, tags:['shift', 'arithmetic', 'right']},
 
-	{mnemonic: 'rol',  match: 0xe118, mask: 0xf118, fn: Type11},
-	{mnemonic: 'ror',  match: 0xe018, mask: 0xf118, fn: Type11},
-	{mnemonic: 'roxl', match: 0xe110, mask: 0xf118, fn: Type11},
-	{mnemonic: 'roxr', match: 0xe010, mask: 0xf118, fn: Type11},
+	{mnemonic: 'rol',  match: 0xe118, mask: 0xf118, fn: Type11, tags:['rotate', 'left']},
+	{mnemonic: 'ror',  match: 0xe018, mask: 0xf118, fn: Type11, tags:['rotate', 'right']},
+	{mnemonic: 'roxl', match: 0xe110, mask: 0xf118, fn: Type11, tags:['rotate', 'left', 'x']},
+	{mnemonic: 'roxr', match: 0xe010, mask: 0xf118, fn: Type11, tags:['rotate', 'right', 'x']},
 
 	{mnemonic: 'move.b', match: 0x1000, mask: 0xf000, fn: Move, tags: ['byte']},
 	{mnemonic: 'move.l', match: 0x2000, mask: 0xf000, fn: Move, tags: ['long']},
