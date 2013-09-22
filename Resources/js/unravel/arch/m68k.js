@@ -22,6 +22,27 @@ var addr_regs = [
 var size_table_0 = ['byte', 'word', 'long', 'invalid'];
 var size_table_1 = ['invalid', 'byte', 'long', 'word'];
 
+var op_size = [
+	{name:'byte', op:'.b', tags:['byte', 'b8'], bytes:1, reader:function(decoder, image, at) {
+		return decoder.read16(image, at) & 0xff;
+	}, reader_signed: function(decoder, image, at) {
+		var r = decoder.read16(image, at) & 0xff;
+		if (r>=0x80) {
+			return r - 0x100;
+		} else return r;
+	}},
+	{name:'word', op:'.w', tags:['word', 'b16'], bytes:2, reader:function(decoder, image, at) {
+		return decoder.read16(image, at);
+	}, reader_signed: function(decoder, image, at) {
+		return decoder.readS16(image, at);
+	}},
+	{name:'long', op:'.l', tags:['long', 'b32'], bytes:3, reader:function(decoder, image, at) {
+		return decoder.read32(image, at);
+	}, reader_signed: function(decoder, image, at) {
+		return decoder.readS32(image, at);
+	}},
+];
+
 var effective_address = function(decoder, op, at, image, op_mode) {
 	var mode = (op & 0x38) >> 3;
 	var reg = (op & 0x07);
@@ -300,7 +321,7 @@ var Bcc = function(decoder, op, at, image, match) {
 	var disp = op & 0xff;
 	var size = "";
 	var opsize = 2;
-	var tags = ['branch', 'displacement'];
+	var tags = ['displacement'];
 	if (disp == 0) {
 		disp = decoder.readS16(image, at+2);
 		dest += 2;
@@ -319,7 +340,7 @@ var Bcc = function(decoder, op, at, image, match) {
 		arrows.push(new Arrow('call', dest, 'code'))
 	}
 	else {
-		arrows.push(new Arrow('call', dest, 'code'));	
+		arrows.push(new Arrow('jump', dest, 'code'));	
 	}
 	if (!match.alwaystrue) arrows.push(new Arrow('jump', at+opsize, 'code'));
 	return new Insn(
@@ -353,13 +374,23 @@ var NOP = function(decoder, op, at, image, match) {
 	)
 }
 
+var RESET = function(decoder, op, at, image, match) {
+	return new Insn(
+		match.mnemonic, ['reset'],
+		at, 2, {},
+		[
+			new Arrow('jump', image.read32(4), 'code') // get reset vector
+		]
+	)
+}
+
 var TRAPV = function(decoder, op, at, image, match) {
 	return new Insn(
 		match.mnemonic, ['trap', 'conditional', 'overflow'],
 		at, 2, {vector: 7},
 		[
 			new Arrow('jump', at+2, 'code'),
-			new Arrow('call', image.read32(28), 'code') // interrupt vector 7, at 7 * 4
+			new Arrow('call', image.read32(0x1c), 'code') // interrupt vector 7, at 7 * 4
 		]
 	)
 }
@@ -387,8 +418,8 @@ var Type11 = function(decoder, op, at, image, match) {
 			count = data_regs[count];
 		}
 		return new Insn(
-			match.mnemonic+['.b','.w','.l'][sz], _.extend(match.tags, tp?['register', 'register-source']:['register'], [['byte', 'word', 'long'][sz]]),
-			at, 2, {dest: dest_data_reg, count:count}
+			match.mnemonic+op_size[sz].op, _.extend(match.tags, tp?['register', 'register-source']:['register'], [op_size[sz].tags]),
+			at, 2, {dest: dest_data_reg, count:count, size:op_size[sz].bytes}
 		)
 	} else { // memory ops
 		var ea = effective_address(decoder, op & 0x3f, at, image, size_table_0[(op & 0xc0)>>6]);
@@ -399,13 +430,56 @@ var Type11 = function(decoder, op, at, image, match) {
 	}
 }
 
+var EXT = function(decoder, op, at, image, match) {
+	var dest = data_regs[op&7];
+	var sz = op_size[((op & 0x1c0) >> 6) - 1];
+	return new Insn(
+		match.mnemonic+sz.op, _.extend(['sign-extend'], sz.tags),
+		at, 2,
+		{dest:dest, size:sz.bytes}
+	)
+}
+
+var Type13 = function(decoder, op, at, image, match) {
+	var dest = data_regs[op&7];
+	var sz = op_size[((op & 0x1c0) >> 6) - 1];
+	var im_size = Math.max(2, sz.bytes);
+	var im = sz.reader_signed(decoder, image, at+2);
+	return new Insn(
+		match.mnemonic+sz.op, _.extend(['immediate'], sz.tags, match.tags),
+		at, 2+im_size,
+		{dest:dest, size:sz.bytes, immediate:imm}
+	)
+}
+
+var Type14 = function(decoder, op, at, image, match) {
+	var dest_type = op & 8;
+	var sz = op_size[(op & 0xc0)>>6];
+	if(dest_type) {
+		var src = addr_regs[op&7];
+		var dest = addr_regs[(op & 0xe00)>>9];
+		return new Insn(
+			match.mnemonic, _.extend(match.tags, ['indirect','address','predec']),
+			at, 2,
+			{source:src, dest:dest}
+		)
+	} else {
+		var src = data_regs[op&7];
+		var dest = data_regs[(op & 0xe00)>>9];
+		return new Insn(
+			match.mnemonic, _.extend(match.tags, ['data']),
+			at, 2,
+			{source:src, dest:dest}
+		)
+	}
+}
 
 
 
 var insn_table = [
 	{mnemonic: 'abcd', match: 0xc100, mask: 0xf1f0, fn: Type14},
 	{mnemonic: 'adda', match: 0xd0c0, mask: 0xf0c0, fn: Type3A, tags:['add', '+']},
-	{mnemonic: 'addx', match: 0xd100, mask: 0xf130, fn: Type14},
+	{mnemonic: 'addx', match: 0xd100, mask: 0xf130, fn: Type14, tags:['add', '+']},
 	{mnemonic: 'add',  match: 0xd000, mask: 0xf000, fn: Type3, tags:['add', '+']},	
 	{mnemonic: 'cmpm', match: 0xb108, mask: 0xf138, fn: Type19},
 	{mnemonic: 'eor',  match: 0xb100, mask: 0xf100, fn: Type3, tags:['xor', '^']},
@@ -440,7 +514,7 @@ var insn_table = [
 	{mnemonic: 'nbcd', match: 0x4800, mask: 0xffc0, fn: Type15},
 	{mnemonic: 'pea',  match: 0x4840, mask: 0xffc0, fn: PEA},
 
-	{mnemonic: 'ext',  match: 0x4800, mask: 0xfe30, fn: Type12},
+	{mnemonic: 'ext',  match: 0x4800, mask: 0xfe30, fn: EXT},
 
 	{mnemonic: 'movem', match: 0x4880, mask: 0xfb80, fn: Type23},
 	
@@ -487,22 +561,22 @@ var insn_table = [
 	{mnemonic: 'sgt',  match: 0x5ec0, mask: 0xfff8, fn: Scc, tags:['greater']},
 	{mnemonic: 'sle',  match: 0x5fc0, mask: 0xfff8, fn: Scc, tags:['less']},
 
-	{mnemonic: 'bra',   match: 0x6000, mask: 0xff00, fn: Bcc, alwaystrue:true},
-	{mnemonic: 'bsr',   match: 0x6100, mask: 0xff00, fn: Bcc, subroutine:true},
-	{mnemonic: 'bhi',  match: 0x6200, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bls',  match: 0x6300, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bcc',  match: 0x6400, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bcs',  match: 0x6500, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bne',  match: 0x6600, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'beq',  match: 0x6700, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bvc',  match: 0x6800, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bvs',  match: 0x6900, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bpl',  match: 0x6a00, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bmi',  match: 0x6b00, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bge',  match: 0x6c00, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'blt',  match: 0x6d00, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'bgt',  match: 0x6e00, mask: 0xff00, fn: Bcc},
-	{mnemonic: 'ble',  match: 0x6f00, mask: 0xff00, fn: Bcc},
+	{mnemonic: 'bra',  match: 0x6000, mask: 0xff00, fn: Bcc, tags:['branch', 'jump'], alwaystrue:true},
+	{mnemonic: 'bsr',  match: 0x6100, mask: 0xff00, fn: Bcc, tags:['branch', 'subroutine'], subroutine:true},
+	{mnemonic: 'bhi',  match: 0x6200, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'higher']},
+	{mnemonic: 'bls',  match: 0x6300, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'lower-same']},
+	{mnemonic: 'bcc',  match: 0x6400, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'carry-clear']},
+	{mnemonic: 'bcs',  match: 0x6500, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'carry-set']},
+	{mnemonic: 'bne',  match: 0x6600, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'not-equal']},
+	{mnemonic: 'beq',  match: 0x6700, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'equal']},
+	{mnemonic: 'bvc',  match: 0x6800, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'overflow-clear']},
+	{mnemonic: 'bvs',  match: 0x6900, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'overflow-set']},
+	{mnemonic: 'bpl',  match: 0x6a00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'plus']},
+	{mnemonic: 'bmi',  match: 0x6b00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'minus']},
+	{mnemonic: 'bge',  match: 0x6c00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'greater-equal']},
+	{mnemonic: 'blt',  match: 0x6d00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'less']},
+	{mnemonic: 'bgt',  match: 0x6e00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'greater']},
+	{mnemonic: 'ble',  match: 0x6f00, mask: 0xff00, fn: Bcc, tags:['branch', 'jump', 'less-equal']},
 	
 
 	{mnemonic: 'addq', match: 0x5000, mask: 0xf100, fn: Type6, tags:['add', '+']},
@@ -559,12 +633,12 @@ var insn_table = [
 	{mnemonic: 'bclr', match: 0x0880, mask: 0xffc0, fn: Type20},
 	{mnemonic: 'bset', match: 0x08c0, mask: 0xffc0, fn: Type20},
 
-	{mnemonic: 'ori',  match: 0x0000, mask: 0xff00, fn: Type13},
-	{mnemonic: 'addi', match: 0x0600, mask: 0xff00, fn: Type13},
-	{mnemonic: 'andi', match: 0x0200, mask: 0xff00, fn: Type13},
-	{mnemonic: 'subi', match: 0x0400, mask: 0xff00, fn: Type13},
-	{mnemonic: 'eori', match: 0x0a00, mask: 0xff00, fn: Type13},
-	{mnemonic: 'cmpi', match: 0x0c00, mask: 0xff00, fn: Type13},
+	{mnemonic: 'ori',  match: 0x0000, mask: 0xff00, fn: Type13, tags:['or', '|']},
+	{mnemonic: 'addi', match: 0x0600, mask: 0xff00, fn: Type13, tags:['add', '+']},
+	{mnemonic: 'andi', match: 0x0200, mask: 0xff00, fn: Type13, tags:['and', '&']},
+	{mnemonic: 'subi', match: 0x0400, mask: 0xff00, fn: Type13, tags:['subtract', '-']},
+	{mnemonic: 'eori', match: 0x0a00, mask: 0xff00, fn: Type13, tags:['xor', '^']},
+	{mnemonic: 'cmpi', match: 0x0c00, mask: 0xff00, fn: Type13, tags:['compare', 'subtract', '-']},
 	
 	{mnemonic: 'btst', match: 0x0100, mask: 0xf1c0, fn: Type21},
 	{mnemonic: 'bchg', match: 0x0140, mask: 0xf1c0, fn: Type21},
@@ -573,7 +647,7 @@ var insn_table = [
 	
 	{mnemonic: 'subq', match: 0x5100, mask: 0xf100, fn: Type6, tags: ['subtract', '-']},
 	{mnemonic: 'suba', match: 0x9000, mask: 0xf0c0, fn: Type3A, tags:['subtract', '-']},
-	{mnemonic: 'subx', match: 0x9100, mask: 0xf130, fn: Type14},
+	{mnemonic: 'subx', match: 0x9100, mask: 0xf130, fn: Type14, tags:['subtract', '-']},
 	{mnemonic: 'sub',  match: 0x9000, mask: 0xf000, fn: Type3, tags:['subtract', '-']},
 	
 
