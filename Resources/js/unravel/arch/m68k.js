@@ -379,7 +379,7 @@ var RESET = function(decoder, op, at, image, match) {
 		match.mnemonic, ['reset'],
 		at, 2, {},
 		[
-			new Arrow('jump', image.read32(4), 'code') // get reset vector
+			new Arrow('int', image.read32(4), 'code') // get reset vector
 		]
 	)
 }
@@ -390,7 +390,7 @@ var TRAPV = function(decoder, op, at, image, match) {
 		at, 2, {vector: 7},
 		[
 			new Arrow('jump', at+2, 'code'),
-			new Arrow('call', image.read32(0x1c), 'code') // interrupt vector 7, at 7 * 4
+			new Arrow('int', image.read32(0x1c), 'code') // interrupt vector 7, at 7 * 4
 		]
 	)
 }
@@ -402,7 +402,7 @@ var TRAP = function(decoder, op, at, image, match) {
 		at, 2, {vector: vector},
 		[
 			new Arrow('jump', at+2, 'code'),
-			new Arrow('call', image.read32(vector*4), 'code')
+			new Arrow('int', image.read32(vector*4 + 0x80), 'code') // call address in interrupt table starting at vector 32
 		]
 	)
 }
@@ -474,7 +474,19 @@ var Type14 = function(decoder, op, at, image, match) {
 	}
 }
 
-
+var DBcc = function(decoder, op, at, image, match) {
+	var src = data_regs[op & 7];
+	var displacement = decoder.readS16(image, at+2);
+	return new Insn(
+		match.mnemonic, _.extend(['decrement-and-branch', 'conditional', 'decrement', 'register', 'data'], match.tags),
+		at, 4,
+		{register:src, displacement:displacement},
+		[
+			new Arrow('jump', at+2+displacement, 'code'),
+			new Arrow('jump', at+4, 'code')
+		]
+	)
+}
 
 var insn_table = [
 	{mnemonic: 'abcd', match: 0xc100, mask: 0xf1f0, fn: Type14},
@@ -527,22 +539,22 @@ var insn_table = [
 	{mnemonic: 'negx', match: 0x4000, mask: 0xff00, fn: Type15},
 	{mnemonic: 'not',  match: 0x4600, mask: 0xff00, fn: Type15},
 	
-	{mnemonic: 'dbt',  match: 0x50c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbf',  match: 0x51c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbhi', match: 0x52c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbls', match: 0x53c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbcc', match: 0x54c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbcs', match: 0x55c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbne', match: 0x56c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbeq', match: 0x57c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbvc', match: 0x58c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbvs', match: 0x59c8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbpl', match: 0x5ac8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbmi', match: 0x5bc8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbge', match: 0x5cc8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dblt', match: 0x5dc8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dbgt', match: 0x5ec8, mask: 0xfff8, fn: Type17},
-	{mnemonic: 'dble', match: 0x5fc8, mask: 0xfff8, fn: Type17},
+	{mnemonic: 'dbt',  match: 0x50c8, mask: 0xfff8, fn: DBcc, tags:['true']},
+	{mnemonic: 'dbf',  match: 0x51c8, mask: 0xfff8, fn: DBcc, tags:['false']},
+	{mnemonic: 'dbhi', match: 0x52c8, mask: 0xfff8, fn: DBcc, tags:['higher']},
+	{mnemonic: 'dbls', match: 0x53c8, mask: 0xfff8, fn: DBcc, tags:['lower-same']},
+	{mnemonic: 'dbcc', match: 0x54c8, mask: 0xfff8, fn: DBcc, tags:['carry-clear']},
+	{mnemonic: 'dbcs', match: 0x55c8, mask: 0xfff8, fn: DBcc, tags:['carry-set']},
+	{mnemonic: 'dbne', match: 0x56c8, mask: 0xfff8, fn: DBcc, tags:['not-equal']},
+	{mnemonic: 'dbeq', match: 0x57c8, mask: 0xfff8, fn: DBcc, tags:['equal']},
+	{mnemonic: 'dbvc', match: 0x58c8, mask: 0xfff8, fn: DBcc, tags:['overflow-clear']},
+	{mnemonic: 'dbvs', match: 0x59c8, mask: 0xfff8, fn: DBcc, tags:['overflow-set']},
+	{mnemonic: 'dbpl', match: 0x5ac8, mask: 0xfff8, fn: DBcc, tags:['plus']},
+	{mnemonic: 'dbmi', match: 0x5bc8, mask: 0xfff8, fn: DBcc, tags:['minus']},
+	{mnemonic: 'dbge', match: 0x5cc8, mask: 0xfff8, fn: DBcc, tags:['greater-equal']},
+	{mnemonic: 'dblt', match: 0x5dc8, mask: 0xfff8, fn: DBcc, tags:['less-than']},
+	{mnemonic: 'dbgt', match: 0x5ec8, mask: 0xfff8, fn: DBcc, tags:['greater']},
+	{mnemonic: 'dble', match: 0x5fc8, mask: 0xfff8, fn: DBcc, tags:['less']},
 	
 	{mnemonic: 'st',   match: 0x50c0, mask: 0xfff8, fn: Scc, tags:['true']},
 	{mnemonic: 'sf',   match: 0x51c0, mask: 0xfff8, fn: Scc, tags:['false']},

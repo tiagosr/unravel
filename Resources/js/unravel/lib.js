@@ -7,6 +7,7 @@ CodeGraphNode.prototype.trace = function(code, deep) {
 	this.flow = {
 		jump: [],
 		call: [],
+		interrupt: [],
 		data: []
 	}
 	var self = this;
@@ -17,6 +18,9 @@ CodeGraphNode.prototype.trace = function(code, deep) {
 				break;
 			case "call":
 				self.flow.call.push(code.node_at(arrow.dest, deep));
+				break;
+			case "int":
+				self.flow.interrupt.push(code.node_at(arrow.dest, deep));
 				break;
 			case "data":
 				var flow = code.node_at(arrow.dest, false);
